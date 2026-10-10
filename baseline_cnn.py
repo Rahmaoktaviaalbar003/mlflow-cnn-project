@@ -1,4 +1,7 @@
 
+import json
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,7 +11,8 @@ import mlflow.pytorch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
-# 1. Konfigurasi
+
+# 1. Konfigurasi MLflow
 mlflow.set_tracking_uri("http://127.0.0.1:5000")
 mlflow.set_experiment("CNN-FashionMNIST")
 
@@ -21,7 +25,26 @@ EPOCHS = 2
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
-# 2. Dataset Fashion-MNIST
+
+# 2. Membaca hash dataset
+hash_file = Path("dataset_hash.json")
+
+if not hash_file.exists():
+    raise FileNotFoundError(
+        "dataset_hash.json tidak ditemukan. "
+        "Jalankan python dataset_hash.py terlebih dahulu."
+    )
+
+with hash_file.open("r", encoding="utf-8") as f:
+    dataset_info = json.load(f)
+
+dataset_hash = dataset_info["dataset_sha256"]
+
+print("Dataset:", dataset_info["dataset"])
+print("Dataset SHA-256:", dataset_hash)
+
+
+# 3. Dataset Fashion-MNIST
 transform = transforms.ToTensor()
 
 train_dataset = datasets.FashionMNIST(
@@ -50,7 +73,8 @@ test_loader = DataLoader(
     shuffle=False
 )
 
-# 3. Arsitektur CNN
+
+# 4. Arsitektur CNN
 class CNN(nn.Module):
     def __init__(self):
         super().__init__()
@@ -82,7 +106,8 @@ optimizer = optim.Adam(
     lr=LEARNING_RATE
 )
 
-# 4. Training dan pencatatan MLflow
+
+# 5. Training dan pencatatan MLflow
 with mlflow.start_run(run_name="CNN-Baseline"):
 
     mlflow.log_params({
@@ -95,9 +120,16 @@ with mlflow.start_run(run_name="CNN-Baseline"):
         "seed": 42
     })
 
+    # Catat identitas dataset pada run
+    mlflow.set_tag("dataset_sha256", dataset_hash)
+    mlflow.set_tag("dataset_name", dataset_info["dataset"])
+    mlflow.set_tag(
+        "dataset_file_count",
+        str(dataset_info["file_count"])
+    )
+
     for epoch in range(EPOCHS):
         model.train()
-
         total_loss = 0.0
         correct = 0
         total = 0
@@ -107,6 +139,7 @@ with mlflow.start_run(run_name="CNN-Baseline"):
             labels = labels.to(device)
 
             optimizer.zero_grad()
+
             outputs = model(images)
             loss = criterion(outputs, labels)
 
@@ -122,9 +155,8 @@ with mlflow.start_run(run_name="CNN-Baseline"):
         train_loss = total_loss / total
         train_accuracy = correct / total
 
-        # Evaluasi data test
+        # Evaluasi pada test dataset
         model.eval()
-
         test_correct = 0
         test_total = 0
 
@@ -142,7 +174,6 @@ with mlflow.start_run(run_name="CNN-Baseline"):
 
         test_accuracy = test_correct / test_total
 
-        # Catat metrik setiap epoch
         mlflow.log_metrics({
             "train_loss": train_loss,
             "train_accuracy": train_accuracy,
@@ -156,16 +187,16 @@ with mlflow.start_run(run_name="CNN-Baseline"):
             f"Test Acc: {test_accuracy:.4f}"
         )
 
-    # 5. Simpan model ke MLflow
-    example_input = torch.zeros(
-        1, 1, 28, 28
-    ).to(device)
+    # Simpan model ke MLflow
+    example_input = torch.zeros(1, 1, 28, 28)
+    model_cpu = model.to("cpu")
 
     mlflow.pytorch.log_model(
-        model,
+        model_cpu,
         name="cnn_model",
         input_example=example_input,
         serialization_format="pickle"
     )
 
-    print("Baseline selesai. Model dan metrik tercatat di MLflow.")
+    print("Baseline selesai.")
+    print("Metrik, model, dan hash dataset tercatat di MLflow.")
