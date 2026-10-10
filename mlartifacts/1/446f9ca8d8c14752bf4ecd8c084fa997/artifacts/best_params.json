@@ -1,0 +1,5 @@
+{
+  "learning_rate": 0.0062189838789497,
+  "batch_size": 64,
+  "filters": 32
+}

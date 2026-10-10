@@ -1,0 +1,14 @@
+{
+  "seeds": [
+    42,
+    123,
+    2026
+  ],
+  "test_accuracies": [
+    0.8902,
+    0.88,
+    0.8902
+  ],
+  "mean_test_accuracy": 0.8868,
+  "std_test_accuracy": 0.005888972745734175
+}
