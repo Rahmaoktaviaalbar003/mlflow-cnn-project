@@ -1,1 +1,11 @@
 /data
+# MLflow local database and artifacts
+mlflow.db
+mlartifacts/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
