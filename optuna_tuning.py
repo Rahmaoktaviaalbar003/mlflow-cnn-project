@@ -1,5 +1,6 @@
-
 import json
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,6 +9,7 @@ import optuna
 
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
+
 
 # 1. Konfigurasi
 TRACKING_URI = "http://127.0.0.1:5000"
@@ -21,10 +23,41 @@ mlflow.set_experiment(EXPERIMENT_NAME)
 
 torch.manual_seed(SEED)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
 print(f"Device: {device}")
 
-# 2. Dataset dan validation split
+
+# 2. Membaca hash dataset
+def log_dataset_hash():
+    hash_file = Path("dataset_hash.json")
+
+    if not hash_file.exists():
+        print(
+            "PERINGATAN: dataset_hash.json tidak ditemukan. "
+            "Hash dataset tidak dicatat pada run ini."
+        )
+        return
+
+    with hash_file.open("r", encoding="utf-8") as f:
+        dataset_info = json.load(f)
+
+    mlflow.set_tag(
+        "dataset_sha256",
+        dataset_info["dataset_sha256"]
+    )
+    mlflow.set_tag(
+        "dataset_name",
+        dataset_info["dataset"]
+    )
+    mlflow.set_tag(
+        "dataset_file_count",
+        str(dataset_info["file_count"])
+    )
+
+
+# 3. Dataset dan validation split
 transform = transforms.ToTensor()
 
 full_train = datasets.FashionMNIST(
@@ -53,16 +86,26 @@ test_loader = DataLoader(
     shuffle=False
 )
 
-# 3. CNN dengan jumlah filter yang bisa diatur
+
+# 4. CNN dengan jumlah filter yang bisa diatur
 class CNN(nn.Module):
     def __init__(self, filters):
         super().__init__()
 
         self.features = nn.Sequential(
-            nn.Conv2d(1, filters, kernel_size=3, padding=1),
+            nn.Conv2d(
+                1, filters,
+                kernel_size=3,
+                padding=1
+            ),
             nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Conv2d(filters, filters * 2, kernel_size=3, padding=1),
+
+            nn.Conv2d(
+                filters, filters * 2,
+                kernel_size=3,
+                padding=1
+            ),
             nn.ReLU(),
             nn.MaxPool2d(2)
         )
@@ -78,19 +121,26 @@ class CNN(nn.Module):
         return self.classifier(self.features(x))
 
 
-# 4. Fungsi objective Optuna
+# 5. Fungsi objective Optuna
 def objective(trial):
     learning_rate = trial.suggest_float(
-        "learning_rate", 1e-4, 1e-2, log=True
-    )
-    batch_size = trial.suggest_categorical(
-        "batch_size", [32, 64, 128]
-    )
-    filters = trial.suggest_categorical(
-        "filters", [16, 32]
+        "learning_rate",
+        1e-4,
+        1e-2,
+        log=True
     )
 
-    # Set seed yang sama agar perbandingan lebih konsisten
+    batch_size = trial.suggest_categorical(
+        "batch_size",
+        [32, 64, 128]
+    )
+
+    filters = trial.suggest_categorical(
+        "filters",
+        [16, 32]
+    )
+
+    # Seed yang sama agar perbandingan lebih konsisten
     torch.manual_seed(SEED)
 
     train_loader = DataLoader(
@@ -108,6 +158,7 @@ def objective(trial):
 
     model = CNN(filters).to(device)
     criterion = nn.CrossEntropyLoss()
+
     optimizer = optim.Adam(
         model.parameters(),
         lr=learning_rate
@@ -117,6 +168,9 @@ def objective(trial):
         run_name=f"Optuna-Trial-{trial.number:02d}",
         nested=True
     ):
+        # Catat hash dataset untuk setiap trial
+        log_dataset_hash()
+
         mlflow.log_params({
             "trial_number": trial.number,
             "learning_rate": learning_rate,
@@ -138,8 +192,10 @@ def objective(trial):
             labels = labels.to(device)
 
             optimizer.zero_grad()
+
             outputs = model(images)
             loss = criterion(outputs, labels)
+
             loss.backward()
             optimizer.step()
 
@@ -159,13 +215,16 @@ def objective(trial):
                 labels = labels.to(device)
 
                 outputs = model(images)
+
                 correct += (
                     outputs.argmax(1) == labels
                 ).sum().item()
+
                 total += labels.size(0)
 
         val_accuracy = correct / total
 
+        # Catat metrik
         mlflow.log_metrics({
             "train_loss": train_loss,
             "val_accuracy": val_accuracy
@@ -184,8 +243,13 @@ def objective(trial):
     return val_accuracy
 
 
-# 5. Jalankan 20 trials sebagai nested runs
-with mlflow.start_run(run_name="Optuna-Tuning-20-Trials"):
+# 6. Jalankan 20 trials sebagai nested runs
+with mlflow.start_run(
+    run_name="Optuna-Tuning-20-Trials"
+):
+    # Catat hash dataset pada run induk juga
+    log_dataset_hash()
+
     mlflow.log_params({
         "study": "CNN-Hyperparameter-Tuning",
         "n_trials": N_TRIALS,
@@ -199,18 +263,31 @@ with mlflow.start_run(run_name="Optuna-Tuning-20-Trials"):
         study_name="FashionMNIST-CNN"
     )
 
-    study.optimize(objective, n_trials=N_TRIALS)
+    study.optimize(
+        objective,
+        n_trials=N_TRIALS
+    )
 
     best_params = study.best_params
     best_accuracy = study.best_value
 
-    mlflow.log_metric("best_val_accuracy", best_accuracy)
-    mlflow.log_dict(best_params, "best_params.json")
+    mlflow.log_metric(
+        "best_val_accuracy",
+        best_accuracy
+    )
+
+    mlflow.log_dict(
+        best_params,
+        "best_params.json"
+    )
 
     print("\n=== HASIL OPTUNA ===")
-    print(f"Best validation accuracy: {best_accuracy:.4f}")
+    print(
+        f"Best validation accuracy: {best_accuracy:.4f}"
+    )
     print("Best parameters:")
     print(json.dumps(best_params, indent=4))
+
 
 print("\nOptuna tuning selesai.")
 print("Hasil setiap trial tercatat di MLflow.")
